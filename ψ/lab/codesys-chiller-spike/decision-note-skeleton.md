@@ -74,6 +74,20 @@
 - **ESP32 path**: production deployment looks like flashing firmware to N devices, OTA strategy, fleet provisioning. Different problem class.
 - **What surprised us** (1–2 lines from spike experience).
 
+#### 4a. Pre-populated cross-trade discoveries (from John's coupling check, atlas-oracle#6)
+
+These items were surfaced **before** the spike ran live — by John's `mep-coordinator` subagent reviewing the spike SUPPLY-side design against a real LOAD-side (mock 2-storey office, 25.5 TR). Filled-in observations from the spike will refine or contradict these.
+
+| Discovery | What it means for deployment | Forge stance |
+|-----------|-----------------------------|--------------|
+| **Spike pump (475 GPM @ 150 kPa, const-speed) is wildly oversized for John's 68 GPM circuit** — at 25% turn-down a const-speed centrifugal sits hard left on its curve, head balloons 125–140% causing valve throttling + noise | For production: VFD primary control with DP sensor at remote AHU is **mandatory**, not a "later upgrade." Spike retains const-speed for ML signal simplicity but the production answer is different. | Pseudocode `FB_Pump` annotated with spike-vs-real comment (pass-2). Real-coupled sizing: ~85 GPM @ 90 kPa, ~2 kW VFD. |
+| **ASHRAE 90.1-2022 §6.5.4.2** mandates variable-flow on primary CHW pumps serving > 3 modulating valves | Building energy code compliance is not optional. Spike const-speed would fail code review. | Document standard cite + payback math (1–1.5 yr at typical load) in decision note final. |
+| **BAS protocol mismatch**: spike speaks OPC UA only; real BAS speaks BACnet/MSTP or BACnet/IP | Production runtime needs dual protocol exposure. **CODESYS V3 native `CmpBACnet` library** — same Control Win runtime serves both OPC UA + BACnet/IP simultaneously, no external gateway. If BAS is MSTP-only, ~$300 BACnet/IP-to-MSTP router (Contemporary Controls BASrouter) — Forge-owned. | Strong CODESYS-stack advantage: ESP32+Node-RED would require additional gateway tier (or Node-RED BACnet contrib) — extra moving part. |
+| **Plant sized for spike scenario, not building load** — 100 TR plant for 25.5 TR building = chiller IPLV at 25–35% PLR, not rated COP | For production: re-select chillers at 2× 18–20 TR scroll/screw with N+1, IPLV-optimised for actual operating regime. Single-compressor reciprocating/scroll handles 25% PLR; centrifugal surge risk at deep part-load. | Spike keeps 2× 50 TR for ML kW signal range. Decision note explicitly distinguishes "spike scenario sizing" vs "production sizing for real loads." |
+| **Lag chiller stages by absolute setpoint dwell, but won't fire at 51% load** — real production wants demand-based staging (kW load > X% of lead capacity) in addition to supply-temp fallback | Production staging logic = part-load demand projection + supply-temp safety net. Spike uses supply-temp only (simpler model, sufficient for stage 1-3 demonstration). | Round-2 candidate: add demand-based stage-on (e.g., LOAD_KW > 0.7 × designKW × CH_01_RUN). |
+| **Vendor portability across CODESYS-flavored controllers** (WAGO / Beckhoff / Schneider) | The IEC 61131-3 portability claim is **only as good as the I/O config layer** — `%MX10.0` style addressing is target-specific. Pure-logic POUs port; I/O mapping does not. | Add to spike test plan (round 2): export project, attempt re-target to WAGO CODESYS profile, count manual fixes. |
+| **Acoustic / structural** (John's check item 11): chiller plant room location not specified in spike, but for real production: spring isolators + inertia base + > NC-50 plant room separation from occupied space | Out of scope for spike (no physical plant). Decision note flags as "production planning item, not stack-comparison signal." | — |
+
 ### 5. Verdict — when to use which
 
 > _The actionable section. Fill last after all data in._

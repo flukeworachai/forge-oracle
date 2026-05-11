@@ -1,8 +1,8 @@
 # POU + FB pseudocode — Chiller Plant Spike
 
-> IEC 61131-3 Structured Text (ST) style. Not compile-perfect — for stage 2 copy-paste-and-adjust into CODESYS Dev System.
-> Tag names mirror `atlas-oracle/ψ/learn/factory-chiller-plant/tags.csv` (25 tags). GVL pasted verbatim becomes `GVL_TAGS`.
-> Math model invoked from `FB_Chiller.UpdateModel()` — see `math-model.md` for equations.
+> IEC 61131-3 Structured Text (ST) style. **Pass-2 syntax-compliant** for CODESYS V3 Dev System.
+> Tag names mirror `atlas-oracle/ψ/learn/factory-chiller-plant/tags.csv` plus 2 CHWR alarm tags per John's OQ-7 at [atlas-oracle#6](https://github.com/flukeworachai/atlas-oracle/issues/6) — **27 tags total** (was 25).
+> Math model lives in `FB_ChillerModel`, delegated by `FB_Chiller` — see `math-model.md` for equations.
 
 ## Architecture
 
@@ -32,6 +32,7 @@ VAR_GLOBAL
     CH_01_KW      : REAL;   //  0..500 kW
     CH_01_RUNHRS  : DINT;
     CH_01_LEAD    : BOOL;
+    CH_01_T_RET_HI_ALM : BOOL;   // T_RET > 14°C for 2 min (per John OQ-7, atlas#6)
 
     // ── Chiller 2 ──
     CH_02_RUN     : BOOL;
@@ -41,6 +42,7 @@ VAR_GLOBAL
     CH_02_KW      : REAL;
     CH_02_RUNHRS  : DINT;
     CH_02_LEAD    : BOOL;
+    CH_02_T_RET_HI_ALM : BOOL;   // T_RET > 14°C for 2 min (per John OQ-7, atlas#6)
 
     // ── Pump ──
     PMP_01_RUN    : BOOL;
@@ -101,8 +103,12 @@ IF NOT initDone THEN
 END_IF
 
 // ── alarm manager runs first (latch state for everyone) ──
-fbAlarmMgr.ch01_alm := CH_01_ALM;
-fbAlarmMgr.ch02_alm := CH_02_ALM;
+// CHWR alarms read previous-cycle GVL values — 1-tick (1 s) lag is negligible
+// against the 2-min CHWR dwell timer inside FB_Chiller.
+fbAlarmMgr.ch01_alm     := CH_01_ALM;
+fbAlarmMgr.ch02_alm     := CH_02_ALM;
+fbAlarmMgr.ch01_chwr_hi := CH_01_T_RET_HI_ALM;
+fbAlarmMgr.ch02_chwr_hi := CH_02_T_RET_HI_ALM;
 fbAlarmMgr();
 PLANT_ALM_ANY := fbAlarmMgr.anyActive;
 
@@ -126,11 +132,12 @@ fbCh01.chws_sp      := CHWS_SP;
 fbCh01.ambient_t    := AMBIENT_T;
 fbCh01.load_share   := fbLeadLag.ch01_load_share;
 fbCh01();
-CH_01_RUN     := fbCh01.run;
-CH_01_T_SUP   := fbCh01.t_sup;
-CH_01_T_RET   := fbCh01.t_ret;
-CH_01_KW      := fbCh01.kw;
-CH_01_RUNHRS  := fbCh01.runhrs;
+CH_01_RUN          := fbCh01.run;
+CH_01_T_SUP        := fbCh01.t_sup;
+CH_01_T_RET        := fbCh01.t_ret;
+CH_01_KW           := fbCh01.kw;
+CH_01_RUNHRS       := fbCh01.runhrs;
+CH_01_T_RET_HI_ALM := fbCh01.chwr_hi_alarm;
 
 // ── chiller 2 (mirrors CH_01 wiring) ──
 fbCh02.lead         := CH_02_LEAD;
@@ -140,11 +147,12 @@ fbCh02.chws_sp      := CHWS_SP;
 fbCh02.ambient_t    := AMBIENT_T;
 fbCh02.load_share   := fbLeadLag.ch02_load_share;
 fbCh02();
-CH_02_RUN     := fbCh02.run;
-CH_02_T_SUP   := fbCh02.t_sup;
-CH_02_T_RET   := fbCh02.t_ret;
-CH_02_KW      := fbCh02.kw;
-CH_02_RUNHRS  := fbCh02.runhrs;
+CH_02_RUN          := fbCh02.run;
+CH_02_T_SUP        := fbCh02.t_sup;
+CH_02_T_RET        := fbCh02.t_ret;
+CH_02_KW           := fbCh02.kw;
+CH_02_RUNHRS       := fbCh02.runhrs;
+CH_02_T_RET_HI_ALM := fbCh02.chwr_hi_alarm;
 
 // ── pump ──
 fbPump.sched_on     := SCHED_ON;
@@ -171,27 +179,31 @@ END_PROGRAM
 ```iecst
 FUNCTION_BLOCK FB_Chiller
 VAR_INPUT
-    id          : INT;       // 1 or 2 (for diagnostics)
-    lead        : BOOL;      // assigned lead
-    lag         : BOOL;      // currently committed as lag
-    sched_on    : BOOL;
-    chws_sp     : REAL;
-    ambient_t   : REAL;
-    load_share  : REAL;      // 0..1 fraction of plant load this chiller serves
-    designKW    : REAL := 250.0;
+    id                : INT;       // 1 or 2 (for diagnostics)
+    lead              : BOOL;      // assigned lead
+    lag               : BOOL;      // currently committed as lag
+    sched_on          : BOOL;
+    chws_sp           : REAL;
+    ambient_t         : REAL;
+    load_share        : REAL;      // 0..1 fraction of plant load this chiller serves
+    designKW          : REAL := 250.0;
+    chwr_hi_threshold : REAL := 14.0;     // CHWR alarm threshold, °C (John OQ-7)
+    chwr_hi_dwell     : TIME := T#2m;     // dwell before latch
 END_VAR
 VAR_OUTPUT
-    run         : BOOL;
-    t_sup       : REAL := 12.0;   // start warm
-    t_ret       : REAL := 17.0;
-    kw          : REAL;
-    runhrs      : DINT;
-    healthy     : BOOL := TRUE;
+    run               : BOOL;
+    t_sup             : REAL := 12.0;     // start warm
+    t_ret             : REAL := 17.0;
+    kw                : REAL;
+    runhrs            : DINT;
+    healthy           : BOOL := TRUE;
+    chwr_hi_alarm     : BOOL;             // latches when t_ret > threshold for dwell time
 END_VAR
 VAR
-    fbModel     : FB_ChillerModel;
-    runhrs_ms   : ULINT;     // accumulator before /3600000 → DINT
-    last_run    : BOOL;
+    fbModel           : FB_ChillerModel;
+    chwrHiTimer       : TON;
+    runhrs_ms         : ULINT;            // accumulator before /3600000 → DINT
+    last_run          : BOOL;
 END_VAR
 
 // ── start/stop logic ──
@@ -215,6 +227,10 @@ fbModel();
 t_sup := fbModel.t_sup;
 t_ret := fbModel.t_ret;
 kw    := fbModel.kw;
+
+// ── CHWR high alarm (John OQ-7, atlas#6 — diagnostic, does not trip chiller) ──
+chwrHiTimer(IN := (t_ret > chwr_hi_threshold), PT := chwr_hi_dwell);
+chwr_hi_alarm := chwrHiTimer.Q;
 
 last_run := run;
 
@@ -326,9 +342,14 @@ VAR_OUTPUT
     dp              : REAL;
 END_VAR
 VAR CONSTANT
-    DESIGN_FLOW_LPS : REAL := 30.0;
-    DESIGN_DP_KPA   : REAL := 150.0;
-    DESIGN_KW       : REAL := 7.5;
+    // ── Spike sizing — plant-scale (factory chiller scenario, 100 TR ceiling). ──
+    // For real building-coupled design (per atlas#6, 25.5 TR office):
+    //   resize to ~5.4 L/s (85 GPM) @ 90 kPa, ~2 kW VFD primary.
+    // ASHRAE 90.1-2022 §6.5.4.2 mandates VFD on variable-flow primaries > 7.5 kW.
+    // Captured in decision-note-skeleton.md §4 Deployment.
+    DESIGN_FLOW_LPS : REAL := 30.0;   // 475 GPM @ spike — building-coupled ≈ 5.4 L/s
+    DESIGN_DP_KPA   : REAL := 150.0;  // spike — building-coupled ≈ 90 kPa
+    DESIGN_KW       : REAL := 7.5;    // spike — building-coupled ≈ 2 kW with VFD
 END_VAR
 
 // constant-speed pump — runs whenever chillers are committed
@@ -367,13 +388,15 @@ VAR CONSTANT
     DT_S        : REAL := 1.0;
     TAU_S       : REAL := 120.0;   // basin thermal time constant
 END_VAR
+VAR
+    target  : REAL;                // first-order target (declared at top — pass-2 fix)
+END_VAR
 
 // fan hysteresis
 IF basin_t > BASIN_HI_T THEN fan_run := TRUE; END_IF
 IF basin_t < BASIN_LO_T THEN fan_run := FALSE; END_IF
 
 // basin temperature first-order
-DECLARE target : REAL;
 IF fan_run THEN
     target := ambient_t + APPROACH_K + heat_rejection_kw * 0.005;  // rough rise per kW
 ELSE
@@ -392,33 +415,51 @@ END_FUNCTION_BLOCK
 ```iecst
 FUNCTION_BLOCK FB_AlarmManager
 VAR_INPUT
-    ch01_alm    : BOOL;
-    ch02_alm    : BOOL;
-    pump_fault  : BOOL;
-    ct_fault    : BOOL;
+    ch01_alm        : BOOL;
+    ch02_alm        : BOOL;
+    ch01_chwr_hi    : BOOL;       // per John OQ-7, atlas#6
+    ch02_chwr_hi    : BOOL;
+    pump_fault      : BOOL;
+    ct_fault        : BOOL;
 END_VAR
 VAR_OUTPUT
-    anyActive   : BOOL;
-    activeCount : INT;
+    anyActive       : BOOL;
+    activeCount     : INT;
 END_VAR
 
 activeCount := 0;
-IF ch01_alm THEN activeCount := activeCount + 1; END_IF
-IF ch02_alm THEN activeCount := activeCount + 1; END_IF
-IF pump_fault THEN activeCount := activeCount + 1; END_IF
-IF ct_fault THEN activeCount := activeCount + 1; END_IF
+IF ch01_alm     THEN activeCount := activeCount + 1; END_IF
+IF ch02_alm     THEN activeCount := activeCount + 1; END_IF
+IF ch01_chwr_hi THEN activeCount := activeCount + 1; END_IF
+IF ch02_chwr_hi THEN activeCount := activeCount + 1; END_IF
+IF pump_fault   THEN activeCount := activeCount + 1; END_IF
+IF ct_fault     THEN activeCount := activeCount + 1; END_IF
 
 anyActive := activeCount > 0;
 
 END_FUNCTION_BLOCK
 ```
 
-## Notes for stage 2 execution
+## CODESYS-syntax notes (pass-2 verified)
 
-- **ST literal syntax**: CODESYS may want `(* … *)` comment style — single-line `//` is supported in V3 but watch for parser quirks.
-- **`SEL(cond, false_val, true_val)`** is the IEC ternary — order is `(cond, IN0, IN1)` returning IN0 when FALSE, IN1 when TRUE.
-- **Method definitions on FBs** — pseudocode keeps logic in the FB body. If we want explicit Method blocks (Start/Stop/IsHealthy), refactor in CODESYS — same logic, surface as methods.
-- **Anomaly injection point** for stage 3 — `FB_ChillerModel` accepts a `kw_drift_factor` input we add later, multiplies output by `1.0 + drift_pct/100`. Keep the hook in mind even if not implemented yet.
-- **Load profile** — `LOAD_KW` in GVL is a free-running variable; in stage 2 set manually via WebVisu slider. Stage 3 may drive it from a sine/random walk.
+- **Comments**: `//` single-line and `(* … *)` block comments both work in CODESYS V3 ST. Pass-2 uses `//` throughout.
+- **`SEL(cond, IN0, IN1)`**: IEC 61131-3 ternary — returns `IN0` when `cond=FALSE`, `IN1` when `cond=TRUE`. Used in `FB_LeadLag.load_share` and `FB_CoolingTower.makeup_pct`.
+- **Variable declarations**: ALL local vars must be in `VAR ... END_VAR` blocks BEFORE the body. `DECLARE` mid-body (used in pass-1) is **NOT** standard IEC — fixed in `FB_CoolingTower.target` (now in a `VAR` section).
+- **Type conversions**: explicit `DINT(x)`, `REAL(x)`, etc. — used in `FB_Chiller.runhrs` accumulator.
+- **Timer types**: `TON` instance + call form `lagOnTimer(IN := …, PT := T#5m)`. `T#` literal prefix for `TIME` constants.
+- **Method blocks**: pseudocode keeps logic in the FB body. If wanting `FB.Start()` / `.Stop()` / `.IsHealthy()` shape, refactor as Methods in CODESYS GUI — identical logic, different surface.
+- **GVL access**: `VAR_GLOBAL` accessed by simple name across all POUs once declared. Pass-2 uses unqualified names (`CHWS_SP`, not `GVL_TAGS.CHWS_SP`) — works in V3 if there's no name collision.
+
+## Design intent notes
+
+- **Anomaly injection** for stage 3: `FB_ChillerModel` will accept a `kw_drift_pct : REAL := 0.0;` input (see `math-model.md §1.4`), multiplies `kw` output by `1.0 + drift_pct/100`. Hook reserved; not yet plumbed in PRG_MAIN.
+- **Load profile**: `LOAD_KW` in GVL is a free-running variable. Stage 2 = WebVisu slider; stage 3 = sine / random walk driven from PRG.
+- **Pump sizing — spike vs real**: `FB_Pump` constants reflect plant-scale (475 GPM @ 150 kPa). Real building-coupled design (per [atlas#6](https://github.com/flukeworachai/atlas-oracle/issues/6) coupling check) = ~85 GPM @ 90 kPa, ~2 kW VFD primary. Captured in `decision-note-skeleton.md §4 Deployment`.
+- **CHWR high alarm** (pass-2 new, per John's OQ-7 at atlas#6): `T_RET > 14°C` for 2 min latches `CH_0X_T_RET_HI_ALM`. Folded into `PLANT_ALM_ANY` via `FB_AlarmManager`. **Diagnostic-only** — does not trip chiller. Reading at PRG_MAIN is previous-cycle GVL (1 s lag, negligible vs 2 min dwell).
+- **Tag count**: 25 → 27. Upstream `atlas-oracle/ψ/learn/factory-chiller-plant/tags.csv` to be synced by Atlas. Suggested CSV rows:
+  ```
+  CH-01_T_RET_HI_ALM,CH-01,Chiller,BOOL,,,,CHWR high temp alarm (T_RET>14°C × 2 min),%MX10.3
+  CH-02_T_RET_HI_ALM,CH-02,Chiller,BOOL,,,,CHWR high temp alarm (T_RET>14°C × 2 min),%MX11.3
+  ```
 
 — Forge 🔥
