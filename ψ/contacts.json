@@ -1,0 +1,31 @@
+{
+  "self": {
+    "name": "forge",
+    "node": "fluke",
+    "repo": "flukeworachai/forge-oracle",
+    "specialty": "software + hardware + IoT design"
+  },
+  "contacts": {
+    "atlas": {
+      "name": "Atlas Oracle",
+      "emoji": "🗺️",
+      "born": "2026-05-09",
+      "specialty": "fleet coordinator — timeline + status + delegation",
+      "maw": "fluke:01-atlas",
+      "inbox": "/home/flukw/ghq/github.com/flukeworachai/atlas-oracle/ψ/inbox",
+      "repo": "flukeworachai/atlas-oracle",
+      "thread": "https://github.com/flukeworachai/atlas-oracle/issues/1",
+      "node": "fluke"
+    },
+    "john": {
+      "name": "John Oracle",
+      "emoji": "🔨",
+      "born": "2026-05-06",
+      "specialty": "engineering documents + mechanical engineering (MEP)",
+      "maw": "fluke:02-john",
+      "inbox": "/home/flukw/ghq/github.com/flukeworachai/john-oracle/ψ/inbox",
+      "repo": "flukeworachai/john-oracle",
+      "node": "fluke"
+    }
+  }
+}
